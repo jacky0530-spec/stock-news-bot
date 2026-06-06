@@ -9,7 +9,7 @@ import json
 import datetime
 import hashlib
 import urllib.parse
-import anthropic
+import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, firestore
 import feedparser
@@ -193,24 +193,25 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
 格式要求：條列清晰、專業易讀、善用數字，每區塊200字以內。"""
 
 def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
-    """呼叫 Claude API 生成摘要"""
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    
-    prompt = build_prompt(slot_key, news_data, now)
-    
-    message = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}]
+    """呼叫 Gemini API 生成摘要（免費方案）"""
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        generation_config=genai.GenerationConfig(
+            max_output_tokens=1500,
+            temperature=0.4,
+        )
     )
-    
-    full_text = message.content[0].text
-    
+
+    prompt = build_prompt(slot_key, news_data, now)
+    response = model.generate_content(prompt)
+    full_text = response.text
+
     # 解析各區塊
     sections = {}
     current_key = None
     current_lines = []
-    
+
     for line in full_text.split("\n"):
         if line.startswith("【") and line.endswith("】"):
             if current_key:
@@ -221,14 +222,19 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
             current_lines.append(line)
     if current_key:
         sections[current_key] = "\n".join(current_lines).strip()
-    
+
+    # Gemini 用量統計
+    usage = {}
+    try:
+        usage["input_tokens"] = response.usage_metadata.prompt_token_count
+        usage["output_tokens"] = response.usage_metadata.candidates_token_count
+    except Exception:
+        usage = {"input_tokens": 0, "output_tokens": 0}
+
     return {
         "full_text": full_text,
         "sections": sections,
-        "usage": {
-            "input_tokens": message.usage.input_tokens,
-            "output_tokens": message.usage.output_tokens,
-        }
+        "usage": usage,
     }
 
 # ─── Firebase 存儲 ───────────────────────────────────────────────────────────
