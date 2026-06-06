@@ -9,7 +9,8 @@ import json
 import datetime
 import hashlib
 import urllib.parse
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import firebase_admin
 from firebase_admin import credentials, firestore
 import feedparser
