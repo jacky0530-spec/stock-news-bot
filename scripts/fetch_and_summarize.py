@@ -196,7 +196,7 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
     """呼叫 Gemini API 生成摘要（免費方案）"""
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.0-flash",
         generation_config=genai.GenerationConfig(
             max_output_tokens=1500,
             temperature=0.4,
