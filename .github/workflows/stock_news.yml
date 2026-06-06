@@ -1,0 +1,51 @@
+name: 股市新聞自動整理
+
+on:
+  schedule:
+    # 台灣時間 = UTC+8，以下為 UTC 時間
+    - cron: '0 22 * * *'   # 台灣時間 06:00
+    - cron: '0 1 * * *'    # 台灣時間 09:00
+    - cron: '0 4 * * *'    # 台灣時間 12:00
+    - cron: '0 7 * * *'    # 台灣時間 15:00
+    - cron: '0 13 * * *'   # 台灣時間 21:00
+
+  # 允許手動觸發（測試用）
+  workflow_dispatch:
+    inputs:
+      slot_override:
+        description: '強制指定時段（am6/am9/pm12/pm15/pm21），留空則自動判斷'
+        required: false
+        default: ''
+
+jobs:
+  fetch-and-summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run stock news summarizer
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          SLOT_OVERRIDE: ${{ github.event.inputs.slot_override }}
+        run: python scripts/fetch_and_summarize.py
+
+      - name: Upload summary artifact（保留7天）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-${{ github.run_id }}
+          path: output/
+          retention-days: 7
