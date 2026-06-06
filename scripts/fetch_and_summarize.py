@@ -194,31 +194,29 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
 格式要求：條列清晰、專業易讀、善用數字，每區塊200字以內。"""
 
 def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
-    """呼叫 Gemini API 生成摘要（免費方案，含限速保護）"""
+    """呼叫 Gemini API 生成摘要（新版 SDK）"""
     import time
 
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        generation_config=genai.GenerationConfig(
-            max_output_tokens=1500,
-            temperature=0.4,
-        )
-    )
-
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     prompt = build_prompt(slot_key, news_data, now)
 
-    # 免費方案限速保護：最多重試3次，每次間隔60秒
     for attempt in range(3):
         try:
             print(f"  呼叫 Gemini（第 {attempt+1} 次嘗試）...")
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=1200,
+                    temperature=0.4,
+                )
+            )
             full_text = response.text
             break
         except Exception as e:
             err = str(e)
             if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                wait = 60 * (attempt + 1)
+                wait = 30 * (attempt + 1)
                 print(f"  [限速] 等待 {wait} 秒後重試...")
                 time.sleep(wait)
                 if attempt == 2:
@@ -226,11 +224,9 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
             else:
                 raise
 
-    # 解析各區塊
     sections = {}
     current_key = None
     current_lines = []
-
     for line in full_text.split("\n"):
         if line.startswith("【") and line.endswith("】"):
             if current_key:
@@ -242,19 +238,15 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
     if current_key:
         sections[current_key] = "\n".join(current_lines).strip()
 
-    usage = {}
     try:
-        usage["input_tokens"] = response.usage_metadata.prompt_token_count
-        usage["output_tokens"] = response.usage_metadata.candidates_token_count
+        usage = {
+            "input_tokens": response.usage_metadata.prompt_token_count,
+            "output_tokens": response.usage_metadata.candidates_token_count,
+        }
     except Exception:
         usage = {"input_tokens": 0, "output_tokens": 0}
 
-    return {
-        "full_text": full_text,
-        "sections": sections,
-        "usage": usage,
-    }
-
+    return {"full_text": full_text, "sections": sections, "usage": usage}
 # ─── Firebase 存儲 ───────────────────────────────────────────────────────────
 
 def save_to_firestore(db, slot_key: str, now: datetime.datetime, 
