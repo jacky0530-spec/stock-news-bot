@@ -193,7 +193,9 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
 格式要求：條列清晰、專業易讀、善用數字，每區塊200字以內。"""
 
 def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
-    """呼叫 Gemini API 生成摘要（免費方案）"""
+    """呼叫 Gemini API 生成摘要（免費方案，含限速保護）"""
+    import time
+
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     model = genai.GenerativeModel(
         model_name="gemini-2.0-flash",
@@ -204,8 +206,24 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
     )
 
     prompt = build_prompt(slot_key, news_data, now)
-    response = model.generate_content(prompt)
-    full_text = response.text
+
+    # 免費方案限速保護：最多重試3次，每次間隔60秒
+    for attempt in range(3):
+        try:
+            print(f"  呼叫 Gemini（第 {attempt+1} 次嘗試）...")
+            response = model.generate_content(prompt)
+            full_text = response.text
+            break
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                wait = 60 * (attempt + 1)
+                print(f"  [限速] 等待 {wait} 秒後重試...")
+                time.sleep(wait)
+                if attempt == 2:
+                    raise
+            else:
+                raise
 
     # 解析各區塊
     sections = {}
@@ -223,7 +241,6 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
     if current_key:
         sections[current_key] = "\n".join(current_lines).strip()
 
-    # Gemini 用量統計
     usage = {}
     try:
         usage["input_tokens"] = response.usage_metadata.prompt_token_count
