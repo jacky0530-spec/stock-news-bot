@@ -63,7 +63,7 @@ service cloud.firestore {
 git init
 git add .
 git commit -m "feat: 股市新聞自動整理機器人"
-git remote add origin https://github.com/你的帳號/stock-news-bot.git
+git remote add origin https://github.com/jacky0530-spec/stock-news-bot.git
 git push -u origin main
 ```
 

@@ -8,6 +8,7 @@ import os
 import json
 import datetime
 import hashlib
+import urllib.parse
 import anthropic
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -24,21 +25,49 @@ SLOT_CONFIG = {
     "pm21": {"label": "美股前（21:00）", "focus": "美股預市、Fed動態、重要財報、台積電ADR"},
 }
 
-# RSS 新聞來源
+# feedparser 使用的 User-Agent（模擬瀏覽器，提高成功率）
+FEED_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; StockNewsBot/1.0; +https://github.com/stockbot)"
+}
+
+def google_news_rss(query: str, lang: str = "zh-TW", region: str = "TW") -> str:
+    """產生 Google News RSS URL（最穩定的免費新聞源）"""
+    q = urllib.parse.quote(query)
+    return f"https://news.google.com/rss/search?q={q}&hl={lang}&gl={region}&ceid={region}:{lang}"
+
+# RSS 新聞來源（三層設計：主要 / Google News 備援 / 官方公告）
 NEWS_FEEDS = {
     "美股": [
+        # ── 主要來源 ──
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US",
-        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
         "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-        "https://feeds.bloomberg.com/markets/news.rss",
+        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+        # ── Google News 補強（繁中）──
+        google_news_rss("美股 S&P500 NASDAQ"),
+        google_news_rss("聯準會 Fed 利率 升降息"),
+        google_news_rss("台積電 ADR TSMC 美股"),
+        google_news_rss("科技股 AI 輝達 NVIDIA"),
     ],
     "台股": [
+        # ── 主要來源 ──
         "https://www.cnyes.com/rss/cat/tw_stock.xml",
-        "https://news.cnyes.com/api/v3/news/category/tw_stock?limit=20",
         "https://www.moneydj.com/KMDJ/RSS/RSSViewer.aspx?English=index",
+        # ── Google News 補強 ──
+        google_news_rss("台股 加權指數 今日行情"),
+        google_news_rss("台積電 台股 半導體"),
+        google_news_rss("外資 投信 買超 賣超 台股"),
+        google_news_rss("ETF 00878 00940 台股"),
+        # ── 官方公告（最穩定）──
+        "https://www.twse.com.tw/rss/zh/",                        # 證交所
+        "https://www.tpex.org.tw/web/regular_emerging/rss.php",   # 櫃買中心
     ],
     "投信投顧": [
-        "https://www.sitca.org.tw/ROC/Industry/IN2201.aspx",
+        # ── Google News（最穩定的投信消息源）──
+        google_news_rss("投信 投顧 市場分析 操作建議"),
+        google_news_rss("基金 ETF 台灣 申購 配息"),
+        google_news_rss("元大 國泰 富邦 群益 投信 基金"),
+        google_news_rss("法人 外資 投信 買賣超 台股"),
+        # ── 官方來源 ──
         "https://www.twse.com.tw/rss/zh/",
     ],
 }
@@ -61,42 +90,65 @@ def init_firebase():
 # ─── 新聞抓取 ────────────────────────────────────────────────────────────────
 
 def fetch_news_from_feeds(category: str, max_per_feed: int = 5) -> list[dict]:
-    """從 RSS feeds 抓取新聞"""
+    """從 RSS feeds 抓取新聞（含 User-Agent、重試、來源標記）"""
     articles = []
     feeds = NEWS_FEEDS.get(category, [])
-    
+    ok_count = 0
+
     for feed_url in feeds:
+        is_google = "news.google.com" in feed_url
+        label = "Google News" if is_google else feed_url.split("/")[2]
         try:
-            parsed = feedparser.parse(feed_url)
-            for entry in parsed.entries[:max_per_feed]:
+            # feedparser 支援傳入 request_headers
+            parsed = feedparser.parse(feed_url, request_headers=FEED_HEADERS)
+            entries = parsed.entries[:max_per_feed]
+            if not entries:
+                print(f"    [空] {label}")
+                continue
+            for entry in entries:
+                # Google News 的標題格式：「新聞標題 - 媒體名稱」，拆開取媒體名
+                title = entry.get("title", "")
+                source_name = parsed.feed.get("title", label)
+                if is_google and " - " in title:
+                    parts = title.rsplit(" - ", 1)
+                    title = parts[0].strip()
+                    source_name = parts[1].strip()
+
                 articles.append({
-                    "title": entry.get("title", ""),
+                    "title": title,
                     "summary": entry.get("summary", entry.get("description", ""))[:300],
                     "link": entry.get("link", ""),
                     "published": entry.get("published", ""),
-                    "source": parsed.feed.get("title", feed_url),
+                    "source": source_name,
+                    "feed_type": "google_news" if is_google else "rss",
                 })
+            ok_count += 1
+            print(f"    ✓ {label}：{len(entries)} 筆")
         except Exception as e:
-            print(f"  [警告] 抓取 {feed_url} 失敗：{e}")
+            print(f"    [警告] {label} 失敗：{e}")
     
-    # 去重（以標題 hash）
+    print(f"    共 {ok_count}/{len(feeds)} 個來源成功")
+
+    # 去重（以標題前30字 hash）
     seen = set()
     unique = []
     for a in articles:
-        h = hashlib.md5(a["title"].encode()).hexdigest()
+        h = hashlib.md5(a["title"][:30].encode()).hexdigest()
         if h not in seen:
             seen.add(h)
             unique.append(a)
-    
-    return unique[:15]  # 每類最多15筆
+
+    # 濾掉標題太短的
+    unique = [a for a in unique if len(a["title"]) > 8]
+    return unique[:20]  # 每類最多20筆給 AI
 
 def fetch_all_news() -> dict[str, list[dict]]:
     """抓取所有分類新聞"""
     result = {}
     for category in ["美股", "台股", "投信投顧"]:
-        print(f"  抓取 {category} 新聞...")
+        print(f"\n  📡 抓取【{category}】新聞...")
         result[category] = fetch_news_from_feeds(category)
-        print(f"    → {len(result[category])} 筆")
+        print(f"  → 有效新聞：{len(result[category])} 筆")
     return result
 
 # ─── AI 摘要 ─────────────────────────────────────────────────────────────────
