@@ -37,7 +37,7 @@ jobs:
 
       - name: Run stock news summarizer
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           SLOT_OVERRIDE: ${{ github.event.inputs.slot_override }}
         run: python scripts/fetch_and_summarize.py
