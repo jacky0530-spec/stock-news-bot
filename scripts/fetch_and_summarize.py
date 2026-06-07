@@ -70,6 +70,18 @@ NEWS_FEEDS = {
         # ── 官方來源 ──
         "https://www.twse.com.tw/rss/zh/",
     ],
+    "AI產業": [
+        # ── AI 核心議題 ──
+        google_news_rss("AI 人工智慧 產業 趨勢"),
+        google_news_rss("NVIDIA 輝達 AI晶片 GPU"),
+        google_news_rss("OpenAI ChatGPT Gemini Claude AI"),
+        google_news_rss("AI伺服器 CoWoS 台積電 AI封裝"),
+        google_news_rss("AI股 美超微 廣達 緯穎 AI概念股"),
+        google_news_rss("機器學習 大語言模型 LLM 生成式AI"),
+        # ── 英文來源補強 ──
+        google_news_rss("AI artificial intelligence investment", lang="en", region="US"),
+        google_news_rss("NVIDIA AMD Intel AI chip earnings", lang="en", region="US"),
+    ],
 }
 
 # ─── Firebase 初始化 ─────────────────────────────────────────────────────────
@@ -145,7 +157,7 @@ def fetch_news_from_feeds(category: str, max_per_feed: int = 5) -> list[dict]:
 def fetch_all_news() -> dict[str, list[dict]]:
     """抓取所有分類新聞"""
     result = {}
-    for category in ["美股", "台股", "投信投顧"]:
+    for category in ["美股", "台股", "投信投顧", "AI產業"]:
         print(f"\n  📡 抓取【{category}】新聞...")
         result[category] = fetch_news_from_feeds(category)
         print(f"  → 有效新聞：{len(result[category])} 筆")
@@ -157,36 +169,67 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
     slot = SLOT_CONFIG[slot_key]
     date_str = now.strftime("%Y/%m/%d %H:%M")
 
-    # 每類只取前5筆標題，節省 token
+    # 每類取前10筆完整標題與摘要
     news_text = ""
     for category, articles in news_data.items():
-        news_text += f"\n【{category}】"
-        for i, a in enumerate(articles[:5], 1):
+        news_text += f"\n\n【{category}原始新聞】"
+        for i, a in enumerate(articles[:10], 1):
+            summary = a.get("summary", "")[:120]
             news_text += f"\n{i}. {a['title']}"
+            if summary:
+                news_text += f"\n   {summary}"
 
-    return f"""財經分析師，{date_str}，{slot['label']}，關注：{slot['focus']}
+    return f"""你是專業財經分析師，現在是 {date_str}，本時段為「{slot['label']}」。
+關注重點：{slot['focus']}
 
-新聞：{news_text}
+以下是最新新聞資料：{news_text}
 
-請用繁體中文輸出（每區塊100字內）：
+請用繁體中文，依照以下格式逐條輸出完整分析，不要濃縮省略：
 
 【美股重點】
-1. 三大重點（一句話含數字）
-2. 氛圍：多/空/中性+主因
-3. 關注：3個個股或主題
-4. 方向：積極/保守/觀望
+▍市場氛圍：多頭/空頭/盤整 + 主要原因說明
+▍重點新聞逐條：
+• （每條新聞獨立一行，說明事件內容與市場影響，含數字）
+• ...
+▍值得關注個股／主題：
+• 個股或主題名稱：原因說明
+• ...
+▍操作方向：積極／保守／觀望，理由說明
 
 【台股重點】
-1. 三大重點（一句話含數字）
-2. 氛圍：多/空/中性+主因
-3. 關注族群：3個
-4. 方向：積極/保守/觀望
+▍市場氛圍：多頭/空頭/盤整 + 主要原因說明
+▍重點新聞逐條：
+• （每條新聞獨立一行，說明事件內容與市場影響，含數字）
+• ...
+▍值得關注族群：
+• 族群名稱：原因說明
+• ...
+▍操作方向：積極／保守／觀望，理由說明
 
-【投信投顧動態】
-法人動向與操作建議（3句話）
+【AI產業議題】
+▍本時段AI產業重大動態逐條：
+• （每條獨立一行，說明事件、涉及公司、對產業鏈影響）
+• ...
+▍台灣AI概念股影響：
+• 公司名稱：受影響方向與原因
+• ...
+▍AI產業趨勢觀察：2-3句整體趨勢說明
+
+【投信投顧分析】
+▍法人動向逐條：
+• （每條獨立一行，說明買超/賣超標的、金額、動向）
+• ...
+▍投信投顧市場觀點逐條：
+• （每條獨立一行，列出各投信投顧發表的市場看法）
+• ...
+▍本週主推商品／ETF：
+• 商品名稱：投資亮點說明
+• ...
 
 【整體結論】
-一句話總結。"""
+• 今日市場主軸：一句話說明
+• 最大風險：一句話說明
+• 操作建議：一句話說明"""
 
 # ─── 多 API 自動輪換 ─────────────────────────────────────────────────────────
 
@@ -346,12 +389,14 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "news_us": news_data.get("美股", [])[:5],
         "news_tw": news_data.get("台股", [])[:5],
         "news_fi": news_data.get("投信投顧", [])[:5],
-        
+        "news_ai": news_data.get("AI產業", [])[:5],
+
         # AI 摘要
         "summary_full": summary["full_text"],
         "summary_us": summary["sections"].get("美股重點", ""),
         "summary_tw": summary["sections"].get("台股重點", ""),
-        "summary_fi": summary["sections"].get("投信投顧動態", ""),
+        "summary_ai": summary["sections"].get("AI產業議題", ""),
+        "summary_fi": summary["sections"].get("投信投顧分析", ""),
         "summary_conclusion": summary["sections"].get("整體結論", ""),
         
         # Token 用量
@@ -368,9 +413,11 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "last_updated": now.isoformat(),
         "last_slot": slot_key,
         "last_slot_label": SLOT_CONFIG[slot_key]["label"],
+        "provider": summary.get("provider", ""),
         "summary_us": summary["sections"].get("美股重點", ""),
         "summary_tw": summary["sections"].get("台股重點", ""),
-        "summary_fi": summary["sections"].get("投信投顧動態", ""),
+        "summary_ai": summary["sections"].get("AI產業議題", ""),
+        "summary_fi": summary["sections"].get("投信投顧分析", ""),
         "conclusion": summary["sections"].get("整體結論", ""),
     })
     
