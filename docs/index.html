@@ -283,18 +283,22 @@ function renderSummary(data) {
   const conclusion = data.conclusion || data.summary_conclusion || '';
   const us = data.summary_us || '';
   const tw = data.summary_tw || '';
+  const ai = data.summary_ai || '';
   const fi = data.summary_fi || '';
+  const provider = data.provider ? `（${data.provider}）` : '';
 
   return `
     ${conclusion ? `
     <div class="conclusion">
       <div class="conclusion-icon">💡</div>
-      <div class="conclusion-text">${escHtml(conclusion)}</div>
+      <div style="flex:1;">
+        <div class="conclusion-text">${escHtml(conclusion)}</div>
+      </div>
     </div>` : ''}
 
     <div class="section-header">
       <div class="section-title">本時段重點</div>
-      <div class="last-updated">更新：${updated}</div>
+      <div class="last-updated">更新：${updated} ${provider}</div>
     </div>
 
     <div class="summary-grid">
@@ -303,7 +307,7 @@ function renderSummary(data) {
           <div class="card-icon icon-us">🇺🇸</div>
           <div><div class="card-title">美股重點</div><div class="card-sub">US Markets</div></div>
         </div>
-        <div class="card-body${us?'':' empty'}">${us ? escHtml(us) : '尚無資料'}</div>
+        <div class="card-body${us?'':' empty'}">${us ? fmtBody(us) : '尚無資料'}</div>
       </div>
 
       <div class="card">
@@ -311,7 +315,15 @@ function renderSummary(data) {
           <div class="card-icon icon-tw">🇹🇼</div>
           <div><div class="card-title">台股重點</div><div class="card-sub">TWSE Markets</div></div>
         </div>
-        <div class="card-body${tw?'':' empty'}">${tw ? escHtml(tw) : '尚無資料'}</div>
+        <div class="card-body${tw?'':' empty'}">${tw ? fmtBody(tw) : '尚無資料'}</div>
+      </div>
+
+      <div class="card summary-full">
+        <div class="card-head">
+          <div class="card-icon" style="background:rgba(160,100,240,0.12);width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;">🤖</div>
+          <div><div class="card-title">AI 產業議題</div><div class="card-sub">AI Industry</div></div>
+        </div>
+        <div class="card-body${ai?'':' empty'}">${ai ? fmtBody(ai) : '尚無資料'}</div>
       </div>
 
       <div class="card summary-full">
@@ -319,7 +331,7 @@ function renderSummary(data) {
           <div class="card-icon icon-fi">📊</div>
           <div><div class="card-title">投信投顧分析</div><div class="card-sub">Fund Analysis</div></div>
         </div>
-        <div class="card-body${fi?'':' empty'}">${fi ? escHtml(fi) : '尚無資料'}</div>
+        <div class="card-body${fi?'':' empty'}">${fi ? fmtBody(fi) : '尚無資料'}</div>
       </div>
     </div>`;
 }
@@ -404,6 +416,14 @@ function escHtml(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtBody(text) {
+  // 把 • 條列、▍標題、換行轉成 HTML
+  return escHtml(text)
+    .replace(/▍([^\n]+)/g, '<div style="margin:10px 0 4px;font-weight:600;color:#c8ccda;">▍$1</div>')
+    .replace(/•([^\n]+)/g, '<div style="margin:3px 0 3px 12px;padding-left:8px;border-left:2px solid #4f8ef7;color:#b0b8d0;">$1</div>')
+    .replace(/\n/g, '');
 }
 
 // ── 初始化 ────────────────────────────────────
