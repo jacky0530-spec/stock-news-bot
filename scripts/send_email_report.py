@@ -23,10 +23,10 @@ def init_firebase():
 # ── 讀取最新摘要 ─────────────────────────────────────────────
 
 def get_latest_summary(db) -> dict:
-    doc = db.collection("latest").doc("summary").get()
+    doc = db.collection("latest").document("summary").get()
     if not doc.exists:
         raise ValueError("Firebase 尚無摘要資料")
-    return doc.data()
+    return doc.to_dict()
 
 # ── 組 HTML 信件 ─────────────────────────────────────────────
 
