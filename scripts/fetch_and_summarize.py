@@ -82,7 +82,80 @@ NEWS_FEEDS = {
         google_news_rss("AI artificial intelligence investment", lang="en", region="US"),
         google_news_rss("NVIDIA AMD Intel AI chip earnings", lang="en", region="US"),
     ],
+    "龍頭個股": [
+        # ── 各產業龍頭新聞 ──
+        google_news_rss("台積電 聯電 股價 法人"),
+        google_news_rss("聯發科 瑞昱 IC設計 股票"),
+        google_news_rss("廣達 鴻海 緯創 AI伺服器"),
+        google_news_rss("國巨 華新科 被動元件"),
+        google_news_rss("台達電 光寶科 電源 散熱"),
+        google_news_rss("日月光 封裝測試 半導體"),
+        google_news_rss("欣興 南電 景碩 載板"),
+        google_news_rss("奇鋐 雙鴻 散熱 AI"),
+    ],
 }
+
+# ─── 產業龍頭監控名單（依圖片整理）────────────────────────────────────────────
+
+WATCHLIST = {
+    "記憶體":      [("南亞科","5347"), ("群聯","8299")],
+    "晶圓代工":    [("台積電","2330"), ("聯電","2303")],
+    "ASIC客製晶片":[("世芯-KY","3661"), ("創意","3443")],
+    "被動元件":    [("國巨","2327"), ("華新科","2492")],
+    "老AI":        [("緯創","3231"), ("廣達","2382"), ("鴻海","2317")],
+    "矽晶圓":      [("環球晶","6488"), ("台勝科","3532")],
+    "散熱":        [("奇鋐","3017"), ("雙鴻","3324")],
+    "矽光子":      [("聯亞","3081"), ("光聖","6442")],
+    "載板":        [("欣興","3037"), ("南電","8046"), ("景碩","3189")],
+    "IC設計":      [("聯發科","2454"), ("瑞昱","2379")],
+    "電源供應器":  [("台達電","2308"), ("光寶科","2301")],
+    "半導體設備":  [("弘塑","3131"), ("漢唐","2404")],
+    "封裝測試":    [("日月光投控","3711"), ("京元電子","2449")],
+    "銅箔基板":    [("金像電","2368"), ("台光電","2383")],
+}
+
+# 所有個股代號列表（供新聞搜尋用）
+ALL_STOCKS = [(name, code) for stocks in WATCHLIST.values() for name, code in stocks]
+
+def fetch_stock_price(code: str, name: str) -> dict:
+    """從台灣證交所 API 抓取即時股價與基本資料"""
+    result = {"code": code, "name": name, "price": None, "pe": None,
+              "pbr": None, "week52_high": None, "week52_low": None, "error": None}
+    try:
+        # 使用 twse openapi 抓取即時行情
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{code}.tw&json=1&delay=0"
+        resp = requests.get(url, timeout=8,
+                            headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("msgArray", [])
+            if items:
+                item = items[0]
+                price = float(item.get("z", item.get("y", 0)) or 0)
+                high  = float(item.get("h", 0) or 0)
+                low   = float(item.get("l", 0) or 0)
+                result.update({
+                    "price": price,
+                    "today_high": high,
+                    "today_low": low,
+                    "open": float(item.get("o", 0) or 0),
+                    "prev_close": float(item.get("y", 0) or 0),
+                    "volume": item.get("v", "0"),
+                })
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+def fetch_all_prices() -> dict:
+    """抓取所有監控個股股價"""
+    prices = {}
+    print("  📈 抓取產業龍頭股價...")
+    for name, code in ALL_STOCKS:
+        p = fetch_stock_price(code, name)
+        prices[code] = p
+        status = f"${p['price']}" if p['price'] else f"失敗({p['error'][:20] if p['error'] else '無資料'})"
+        print(f"    {name}({code})：{status}")
+    return prices
 
 # ─── Firebase 初始化 ─────────────────────────────────────────────────────────
 
@@ -197,7 +270,7 @@ def fetch_news_from_feeds(category: str, max_per_feed: int = 8,
 def fetch_all_news() -> dict[str, list[dict]]:
     """抓取所有分類新聞"""
     result = {}
-    for category in ["美股", "台股", "投信投顧", "AI產業"]:
+    for category in ["美股", "台股", "投信投顧", "AI產業", "龍頭個股"]:
         print(f"\n  📡 抓取【{category}】新聞...")
         result[category] = fetch_news_from_feeds(category)
         print(f"  → 有效新聞：{len(result[category])} 筆")
@@ -205,7 +278,8 @@ def fetch_all_news() -> dict[str, list[dict]]:
 
 # ─── AI 摘要 ─────────────────────────────────────────────────────────────────
 
-def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
+def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime,
+                 prices: dict = None) -> str:
     slot = SLOT_CONFIG[slot_key]
     date_str = now.strftime("%Y/%m/%d %H:%M")
 
@@ -221,11 +295,29 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
             if summary:
                 news_text += f"\n   摘要：{summary}"
 
+    # 整理股價資料給 AI
+    price_text = ""
+    if prices:
+        price_text = "\n\n【產業龍頭即時股價】"
+        for sector, stocks in WATCHLIST.items():
+            price_text += f"\n▍{sector}"
+            for name, code in stocks:
+                p = prices.get(code, {})
+                if p.get("price"):
+                    prev = p.get("prev_close", 0)
+                    curr = p.get("price", 0)
+                    chg = ((curr - prev) / prev * 100) if prev else 0
+                    arrow = "↑" if chg > 0 else "↓" if chg < 0 else "→"
+                    price_text += f"\n  • {name}({code})：${curr:.1f} {arrow}{chg:+.1f}% (昨收${prev:.1f})"
+                else:
+                    price_text += f"\n  • {name}({code})：無資料"
+
     return f"""你是資深財經分析師，擁有20年台美股操盤經驗。現在是 {date_str}，本時段「{slot['label']}」。
 本時段關注：{slot['focus']}
 
 以下是最新新聞原始資料，請仔細閱讀並進行深度分析：
 {news_text}
+{price_text}
 
 ═══════════════════════════════════
 請用繁體中文輸出以下完整分析報告，每個區塊都要詳細，不得省略或濃縮。
@@ -298,11 +390,24 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
 • ETF／基金名稱：投資主題、近期績效、適合族群、機構看法
 • ...
 
+【產業龍頭進場評估】
+針對以上股價資料，逐一分析每檔個股，格式如下：
+• 個股名稱(代號) $現價｜今日 ↑↓→X%
+  - 基本面：本業獲利狀況、近期營收趨勢（依新聞判斷）
+  - 技術面：目前位置偏高/偏低/合理，近期支撐壓力
+  - 估值評估：目前本益比區間是否合理
+  - 建議進場價：保守價 $XXX ／ 積極價 $XXX
+  - 操作建議：買進/觀望/減碼，理由一句話
+  - 風險提示：需注意的主要風險
+
+（依序列出所有有股價資料的個股，無資料者標示「待確認」）
+
 【整體結論】
 • 今日市場主軸：說明最重要的驅動因素
 • 最大風險：說明需要警戒的風險
 • 短線操作建議：具體方向與注意事項
-• 中線展望：未來1-2週市場方向預判"""
+• 中線展望：未來1-2週市場方向預判
+• 本日最值得關注的3檔個股：列出並說明理由"""
 
 # ─── 多 API 自動輪換 ─────────────────────────────────────────────────────────
 
@@ -411,9 +516,10 @@ API_PROVIDERS = [
     ("OpenRouter Llama",        call_openrouter),
 ]
 
-def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
+def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime,
+                     prices: dict = None) -> dict:
     """自動輪換 API：Claude → Gemini → Groq → OpenRouter"""
-    prompt = build_prompt(slot_key, news_data, now)
+    prompt = build_prompt(slot_key, news_data, now, prices)
     print(f"  prompt 長度：{len(prompt)} 字元")
 
     last_error = None
@@ -464,12 +570,16 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "news_fi": news_data.get("投信投顧", [])[:5],
         "news_ai": news_data.get("AI產業", [])[:5],
 
+        # 產業龍頭股價快照
+        "prices": {code: p for code, p in (prices or {}).items() if p.get("price")},
+
         # AI 摘要
         "summary_full": summary["full_text"],
         "summary_us": summary["sections"].get("美股重點", ""),
         "summary_tw": summary["sections"].get("台股重點", ""),
         "summary_ai": summary["sections"].get("AI產業議題", ""),
         "summary_fi": summary["sections"].get("投信投顧分析", ""),
+        "summary_valuation": summary["sections"].get("產業龍頭進場評估", ""),
         "summary_conclusion": summary["sections"].get("整體結論", ""),
         
         # Token 用量
@@ -491,7 +601,9 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "summary_tw": summary["sections"].get("台股重點", ""),
         "summary_ai": summary["sections"].get("AI產業議題", ""),
         "summary_fi": summary["sections"].get("投信投顧分析", ""),
+        "summary_valuation": summary["sections"].get("產業龍頭進場評估", ""),
         "conclusion": summary["sections"].get("整體結論", ""),
+        "prices": {code: p for code, p in (prices or {}).items() if p.get("price")},
     })
     
     print(f"  ✅ 已儲存到 Firestore：{doc_id}")
@@ -540,9 +652,15 @@ def main():
     total = sum(len(v) for v in news_data.values())
     print(f"  ✅ 共抓取 {total} 筆新聞")
 
+    # 2.5 抓取產業龍頭股價
+    print("\n[2.5/4] 抓取產業龍頭即時股價...")
+    prices = fetch_all_prices()
+    ok_prices = sum(1 for p in prices.values() if p.get("price"))
+    print(f"  ✅ 成功取得 {ok_prices}/{len(prices)} 檔股價")
+
     # 3. AI 摘要（失敗直接中止，不重試）
-    print("\n[3/4] 呼叫 Gemini AI 生成摘要...")
-    summary = generate_summary(slot_key, news_data, now)
+    print("\n[3/4] 呼叫 AI 生成摘要與估值分析...")
+    summary = generate_summary(slot_key, news_data, now, prices)
     print(f"  ✅ 摘要生成完成（input:{summary['usage']['input_tokens']} / output:{summary['usage']['output_tokens']} tokens）")
 
     # 4. 儲存
