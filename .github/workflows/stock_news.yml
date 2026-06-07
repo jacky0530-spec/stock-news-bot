@@ -16,11 +16,15 @@ on:
         description: '強制指定時段（am6/am9/pm12/pm15/pm21），留空則自動判斷'
         required: false
         default: ''
+      skip_email:
+        description: '跳過 Email 寄送（true/false）'
+        required: false
+        default: 'false'
 
 jobs:
   fetch-and-summarize:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -35,17 +39,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run stock news summarizer
+      # ── Step 1：抓新聞 + AI 摘要 + 存 Firebase ──
+      - name: 抓取新聞並生成 AI 摘要
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           SLOT_OVERRIDE: ${{ github.event.inputs.slot_override }}
         run: python scripts/fetch_and_summarize.py
 
-      - name: Upload summary artifact（保留7天）
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-${{ github.run_id }}
-          path: output/
-          retention-days: 7
+      # ── Step 2：寄送 Email 報告 ──
+      - name: 寄送 Email 報告
+        if: ${{ github.event.inputs.skip_email != 'true' }}
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: python scripts/send_email_report.py
