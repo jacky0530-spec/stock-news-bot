@@ -214,8 +214,17 @@ const firebaseConfig = {
 
 // ══════════════════════════════════════════════
 
-firebase.initializeApp(FIREBASE_CONFIG);
-const db = firebase.firestore();
+// 等 DOM 與 Firebase SDK 完全載入後才初始化
+let db;
+function getDb() {
+  if (!db) {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(FIREBASE_CONFIG);
+    }
+    db = firebase.firestore();
+  }
+  return db;
+}
 
 const SLOTS = [
   { key:'am6',  time:'06:00', label:'早盤前' },
@@ -318,7 +327,7 @@ function renderSummary(data) {
 // ── 載入最新摘要 ──────────────────────────────
 async function loadLatest() {
   try {
-    const doc = await db.collection('latest').doc('summary').get();
+    const doc = await getDb().collection('latest').doc('summary').get();
     const el = document.getElementById('latest-content');
     if (!doc.exists) {
       el.innerHTML = `<div class="loading" style="color:var(--muted)">尚無資料，等待第一次執行完成</div>`;
@@ -338,7 +347,7 @@ async function loadSlot(slotKey) {
   const el = document.getElementById('latest-content');
   el.innerHTML = '<div class="loading"><div class="spinner"></div><div>載入中...</div></div>';
   try {
-    const doc = await db.collection('stock_summaries').doc(docId).get();
+    const doc = await getDb().collection('stock_summaries').doc(docId).get();
     if (!doc.exists) {
       el.innerHTML = `<div class="loading" style="color:var(--muted)">今日此時段尚無資料（${docId}）</div>`;
       return;
@@ -353,7 +362,7 @@ async function loadSlot(slotKey) {
 async function loadHistory() {
   const el = document.getElementById('history-content');
   try {
-    const snap = await db.collection('stock_summaries')
+    const snap = await getDb().collection('stock_summaries')
       .orderBy('timestamp','desc').limit(30).get();
 
     if (snap.empty) {
@@ -386,7 +395,7 @@ async function loadHistoryDoc(docId) {
   switchTab('latest');
   const el = document.getElementById('latest-content');
   el.innerHTML = '<div class="loading"><div class="spinner"></div><div>載入中...</div></div>';
-  const doc = await db.collection('stock_summaries').doc(docId).get();
+  const doc = await getDb().collection('stock_summaries').doc(docId).get();
   if (doc.exists) el.innerHTML = renderSummary(doc.data());
 }
 
@@ -402,4 +411,3 @@ loadLatest();
 </script>
 </body>
 </html>
-
