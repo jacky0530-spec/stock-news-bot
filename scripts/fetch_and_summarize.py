@@ -550,8 +550,40 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime,
 
 # ─── Firebase 存儲 ───────────────────────────────────────────────────────────
 
-def save_to_firestore(db, slot_key: str, now: datetime.datetime, 
-                       news_data: dict, summary: dict):
+def clean_for_firestore(obj):
+    """遞迴清理資料，確保 Firestore 可接受（移除 None、轉換 float）"""
+    if isinstance(obj, dict):
+        return {k: clean_for_firestore(v) for k, v in obj.items()
+                if v is not None and k != "published_dt"}
+    elif isinstance(obj, list):
+        return [clean_for_firestore(i) for i in obj if i is not None]
+    elif isinstance(obj, float):
+        return round(obj, 4) if obj == obj else 0  # nan check
+    elif isinstance(obj, (int, str, bool)):
+        return obj
+    else:
+        return str(obj)
+
+def clean_prices(prices: dict) -> dict:
+    """清理股價資料，只保留 Firestore 安全的欄位"""
+    result = {}
+    for code, p in (prices or {}).items():
+        if not p.get("price"):
+            continue
+        result[code] = {
+            "code": str(code),
+            "name": str(p.get("name", "")),
+            "price": float(p.get("price") or 0),
+            "prev_close": float(p.get("prev_close") or 0),
+            "today_high": float(p.get("today_high") or 0),
+            "today_low": float(p.get("today_low") or 0),
+            "open": float(p.get("open") or 0),
+            "volume": str(p.get("volume", "0")),
+        }
+    return result
+
+def save_to_firestore(db, slot_key: str, now: datetime.datetime,
+                       news_data: dict, summary: dict, prices: dict = None):
     """儲存結果到 Firestore"""
     date_str = now.strftime("%Y-%m-%d")
     doc_id = f"{date_str}_{slot_key}"
@@ -571,7 +603,7 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "news_ai": news_data.get("AI產業", [])[:5],
 
         # 產業龍頭股價快照
-        "prices": {code: p for code, p in (prices or {}).items() if p.get("price")},
+        "prices": clean_prices(prices),
 
         # AI 摘要
         "summary_full": summary["full_text"],
@@ -588,7 +620,8 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "status": "success",
     }
     
-    # 寫入每日詳細記錄
+    # 清理資料並寫入 Firestore
+    doc_data = clean_for_firestore(doc_data)
     db.collection("stock_summaries").document(doc_id).set(doc_data)
     
     # 更新「最新摘要」快取（前端讀取用）
@@ -603,7 +636,7 @@ def save_to_firestore(db, slot_key: str, now: datetime.datetime,
         "summary_fi": summary["sections"].get("投信投顧分析", ""),
         "summary_valuation": summary["sections"].get("產業龍頭進場評估", ""),
         "conclusion": summary["sections"].get("整體結論", ""),
-        "prices": {code: p for code, p in (prices or {}).items() if p.get("price")},
+        "prices": clean_prices(prices),
     })
     
     print(f"  ✅ 已儲存到 Firestore：{doc_id}")
@@ -665,7 +698,7 @@ def main():
 
     # 4. 儲存
     print("\n[4/4] 儲存到 Firestore...")
-    doc_id = save_to_firestore(db, slot_key, now, news_data, summary)
+    doc_id = save_to_firestore(db, slot_key, now, news_data, summary, prices)
 
     print(f"\n{'='*60}")
     print(f"✅ 完成！文件 ID：{doc_id}")
