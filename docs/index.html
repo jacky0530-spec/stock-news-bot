@@ -100,8 +100,12 @@
   .icon-sum { background: rgba(160,110,247,0.12); }
   .card-title { font-size: 13px; font-weight: 600; }
   .card-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
-  .card-body  { font-size: 13px; line-height: 1.85; color: #c8ccda; white-space: pre-wrap; }
+  .card-body  { font-size: 13px; line-height: 1.85; color: #c8ccda; }
   .card-body.empty { color: var(--muted); font-style: italic; }
+  .card-body.rich { max-height: 600px; overflow-y: auto; padding-right: 4px; }
+  .card-body.rich::-webkit-scrollbar { width: 4px; }
+  .card-body.rich::-webkit-scrollbar-track { background: transparent; }
+  .card-body.rich::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 99px; }
 
   /* ── CONCLUSION BAR ── */
   .conclusion {
@@ -305,33 +309,45 @@ function renderSummary(data) {
       <div class="card">
         <div class="card-head">
           <div class="card-icon icon-us">🇺🇸</div>
-          <div><div class="card-title">美股重點</div><div class="card-sub">US Markets</div></div>
+          <div>
+            <div class="card-title">美股重點</div>
+            <div class="card-sub">US Markets · 近48小時</div>
+          </div>
         </div>
-        <div class="card-body${us?'':' empty'}">${us ? fmtBody(us) : '尚無資料'}</div>
+        <div class="card-body rich${us?'':' empty'}">${us ? fmtBody(us) : '尚無資料'}</div>
       </div>
 
       <div class="card">
         <div class="card-head">
           <div class="card-icon icon-tw">🇹🇼</div>
-          <div><div class="card-title">台股重點</div><div class="card-sub">TWSE Markets</div></div>
+          <div>
+            <div class="card-title">台股重點</div>
+            <div class="card-sub">TWSE Markets · 近48小時</div>
+          </div>
         </div>
-        <div class="card-body${tw?'':' empty'}">${tw ? fmtBody(tw) : '尚無資料'}</div>
+        <div class="card-body rich${tw?'':' empty'}">${tw ? fmtBody(tw) : '尚無資料'}</div>
       </div>
 
       <div class="card summary-full">
         <div class="card-head">
           <div class="card-icon" style="background:rgba(160,100,240,0.12);width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;">🤖</div>
-          <div><div class="card-title">AI 產業議題</div><div class="card-sub">AI Industry</div></div>
+          <div>
+            <div class="card-title">AI 產業議題</div>
+            <div class="card-sub">AI Industry · 近48小時深度分析</div>
+          </div>
         </div>
-        <div class="card-body${ai?'':' empty'}">${ai ? fmtBody(ai) : '尚無資料'}</div>
+        <div class="card-body rich${ai?'':' empty'}">${ai ? fmtBody(ai) : '尚無資料，等待下次執行更新'}</div>
       </div>
 
       <div class="card summary-full">
         <div class="card-head">
           <div class="card-icon icon-fi">📊</div>
-          <div><div class="card-title">投信投顧分析</div><div class="card-sub">Fund Analysis</div></div>
+          <div>
+            <div class="card-title">投信投顧分析</div>
+            <div class="card-sub">Fund Analysis · 法人動向與觀點</div>
+          </div>
         </div>
-        <div class="card-body${fi?'':' empty'}">${fi ? fmtBody(fi) : '尚無資料'}</div>
+        <div class="card-body rich${fi?'':' empty'}">${fi ? fmtBody(fi) : '尚無資料，等待下次執行更新'}</div>
       </div>
     </div>`;
 }
