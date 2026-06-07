@@ -210,8 +210,8 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "5663462927",
   appId: "1:5663462927:web:e9580d1bb54d0da2c5f57a",
   measurementId: "G-E5PWTC0HNK"
-};
 
+};
 // ══════════════════════════════════════════════
 
 // 等 DOM 與 Firebase SDK 完全載入後才初始化
@@ -419,11 +419,37 @@ function escHtml(str) {
 }
 
 function fmtBody(text) {
-  // 把 • 條列、▍標題、換行轉成 HTML
   return escHtml(text)
-    .replace(/▍([^\n]+)/g, '<div style="margin:10px 0 4px;font-weight:600;color:#c8ccda;">▍$1</div>')
-    .replace(/•([^\n]+)/g, '<div style="margin:3px 0 3px 12px;padding-left:8px;border-left:2px solid #4f8ef7;color:#b0b8d0;">$1</div>')
-    .replace(/\n/g, '');
+    .split('\n')
+    .map(line => {
+      line = line.trim();
+      if (!line) return '';
+      // ▍ 小標題
+      if (line.startsWith('▍')) {
+        return '<div style="margin:14px 0 6px;font-size:12px;font-weight:700;color:#7ab3f5;letter-spacing:.5px;">' + line + '</div>';
+      }
+      // • 條列項目
+      if (line.startsWith('•')) {
+        const content = line.slice(1).trim();
+        // 判斷方向箭頭上色
+        let color = '#b0b8d0';
+        if (content.includes('↑') || content.includes('利多')) color = '#38c9a0';
+        if (content.includes('↓') || content.includes('利空')) color = '#f0606a';
+        return '<div style="display:flex;gap:8px;margin:4px 0 4px 8px;padding:5px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border-left:2px solid #2a3a5a;">'
+          + '<span style="color:#4f8ef7;flex-shrink:0;">•</span>'
+          + '<span style="color:' + color + ';font-size:13px;line-height:1.6;">' + content + '</span>'
+          + '</div>';
+      }
+      // 【標題】行
+      if (line.startsWith('【') && line.endsWith('】')) {
+        return '<div style="font-size:14px;font-weight:700;color:#e8eaf0;margin:16px 0 8px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08);">' + line + '</div>';
+      }
+      // ═ 分隔線
+      if (line.startsWith('═')) return '';
+      // 普通行
+      return '<div style="color:#9099b0;font-size:12px;margin:3px 0 3px 8px;">' + line + '</div>';
+    })
+    .join('');
 }
 
 // ── 初始化 ────────────────────────────────────
