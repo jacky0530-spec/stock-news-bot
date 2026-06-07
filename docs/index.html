@@ -214,7 +214,6 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "5663462927",
   appId: "1:5663462927:web:e9580d1bb54d0da2c5f57a",
   measurementId: "G-E5PWTC0HNK"
-
 };
 // ══════════════════════════════════════════════
 
@@ -289,6 +288,8 @@ function renderSummary(data) {
   const tw = data.summary_tw || '';
   const ai = data.summary_ai || '';
   const fi = data.summary_fi || '';
+  const valuation = data.summary_valuation || '';
+  const prices = data.prices || {};
   const provider = data.provider ? `（${data.provider}）` : '';
 
   return `
@@ -304,6 +305,8 @@ function renderSummary(data) {
       <div class="section-title">本時段重點</div>
       <div class="last-updated">更新：${updated} ${provider}</div>
     </div>
+
+    ${Object.keys(prices).length > 0 ? renderPriceTable(prices) : ''}
 
     <div class="summary-grid">
       <div class="card">
@@ -348,6 +351,17 @@ function renderSummary(data) {
           </div>
         </div>
         <div class="card-body rich${fi?'':' empty'}">${fi ? fmtBody(fi) : '尚無資料，等待下次執行更新'}</div>
+      </div>
+
+      <div class="card summary-full">
+        <div class="card-head">
+          <div class="card-icon" style="background:rgba(247,192,79,0.15);width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;">🎯</div>
+          <div>
+            <div class="card-title">產業龍頭進場評估</div>
+            <div class="card-sub">每日估值 · AI 建議進場價位</div>
+          </div>
+        </div>
+        <div class="card-body rich${valuation?'':' empty'}">${valuation ? fmtBody(valuation) : '尚無資料，等待下次執行更新'}</div>
       </div>
     </div>`;
 }
@@ -432,6 +446,48 @@ function escHtml(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+const WATCHLIST_SECTORS = {
+  "記憶體":["5347","8299"],"晶圓代工":["2330","2303"],
+  "ASIC":["3661","3443"],"被動元件":["2327","2492"],
+  "老AI":["3231","2382","2317"],"矽晶圓":["6488","3532"],
+  "散熱":["3017","3324"],"矽光子":["3081","6442"],
+  "載板":["3037","8046","3189"],"IC設計":["2454","2379"],
+  "電源":["2308","2301"],"半導體設備":["3131","2404"],
+  "封裝測試":["3711","2449"],"銅箔基板":["2368","2383"],
+};
+
+function renderPriceTable(prices) {
+  if (!prices || Object.keys(prices).length === 0) return '';
+  let rows = '';
+  Object.entries(prices).forEach(([code, p]) => {
+    if (!p.price) return;
+    const prev = p.prev_close || p.price;
+    const chg = ((p.price - prev) / prev * 100);
+    const color = chg > 0 ? '#38c9a0' : chg < 0 ? '#f0606a' : '#7a8099';
+    const arrow = chg > 0 ? '▲' : chg < 0 ? '▼' : '－';
+    rows += `<tr>
+      <td style="color:#e8eaf0;font-weight:500;">${p.name}<span style="color:#4a5068;font-size:11px;margin-left:4px;">${code}</span></td>
+      <td style="color:#e8eaf0;font-weight:600;text-align:right;">$${p.price.toFixed(1)}</td>
+      <td style="color:${color};text-align:right;">${arrow} ${Math.abs(chg).toFixed(1)}%</td>
+      <td style="color:#7a8099;text-align:right;">$${prev.toFixed(1)}</td>
+    </tr>`;
+  });
+  return `<div style="margin-bottom:16px;">
+    <div style="font-size:12px;font-weight:700;color:#7a8099;letter-spacing:.5px;margin-bottom:8px;">📈 產業龍頭即時股價</div>
+    <div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+        <th style="text-align:left;padding:6px 8px;color:#4a5068;">個股</th>
+        <th style="text-align:right;padding:6px 8px;color:#4a5068;">現價</th>
+        <th style="text-align:right;padding:6px 8px;color:#4a5068;">漲跌</th>
+        <th style="text-align:right;padding:6px 8px;color:#4a5068;">昨收</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+  </div>`;
 }
 
 function fmtBody(text) {
