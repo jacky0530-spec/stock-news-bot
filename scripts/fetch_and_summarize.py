@@ -9,7 +9,7 @@ import json
 import datetime
 import hashlib
 import urllib.parse
-from google import genai
+import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, firestore
 import feedparser
@@ -188,26 +188,10 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
 【整體結論】
 一句話總結。"""
 
-def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
-    """呼叫 Gemini API 生成摘要（免費方案，無重試）"""
-    from google import genai as google_genai
-    from google.genai import types
+# ─── 多 API 自動輪換 ─────────────────────────────────────────────────────────
 
-    client = google_genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    prompt = build_prompt(slot_key, news_data, now)
-
-    print(f"  prompt 長度：{len(prompt)} 字元")
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            max_output_tokens=800,
-            temperature=0.4,
-        )
-    )
-    full_text = response.text
-
-    # 解析各區塊
+def parse_sections(full_text: str) -> dict:
+    """解析 AI 回傳文字，拆分各區塊"""
     sections = {}
     current_key = None
     current_lines = []
@@ -221,16 +205,126 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
             current_lines.append(line)
     if current_key:
         sections[current_key] = "\n".join(current_lines).strip()
+    return sections
 
-    try:
-        usage = {
-            "input_tokens": response.usage_metadata.prompt_token_count,
-            "output_tokens": response.usage_metadata.candidates_token_count,
-        }
-    except Exception:
-        usage = {"input_tokens": 0, "output_tokens": 0}
+def call_claude(prompt: str) -> str:
+    """Claude claude-haiku-4-5（最佳繁中財經分析，首選）"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY 未設定")
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "claude-haiku-4-5",
+            "max_tokens": 1000,
+            "temperature": 0.4,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        timeout=60,
+    )
+    if resp.status_code == 529 or resp.status_code == 429:
+        raise RuntimeError(f"429 Claude 額度或速率限制：{resp.text[:200]}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Claude API 錯誤：{resp.status_code} {resp.text[:200]}")
+    return resp.json()["content"][0]["text"]
 
-    return {"full_text": full_text, "sections": sections, "usage": usage}
+def call_gemini(prompt: str) -> str:
+    """Gemini 2.0 Flash（免費：每日1500次）"""
+    from google import genai as google_genai
+    from google.genai import types
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY 未設定")
+    client = google_genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(max_output_tokens=800, temperature=0.4)
+    )
+    return response.text
+
+def call_groq(prompt: str) -> str:
+    """Groq Llama 3（免費：每日14,400次，速度極快）"""
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY 未設定")
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 800,
+            "temperature": 0.4,
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"429 Groq 錯誤：{resp.status_code} {resp.text[:200]}")
+    return resp.json()["choices"][0]["message"]["content"]
+
+def call_openrouter(prompt: str) -> str:
+    """OpenRouter（免費模型備援）"""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY 未設定")
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": "meta-llama/llama-3.1-8b-instruct:free",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 800,
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"429 OpenRouter 錯誤：{resp.status_code} {resp.text[:200]}")
+    return resp.json()["choices"][0]["message"]["content"]
+
+# ── API 輪換順序：Claude 最優先，依序備援 ──
+API_PROVIDERS = [
+    ("Claude Haiku（最佳品質）", call_claude),
+    ("Gemini 2.0 Flash",        call_gemini),
+    ("Groq Llama3-70b",         call_groq),
+    ("OpenRouter Llama",        call_openrouter),
+]
+
+def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
+    """自動輪換 API：Claude → Gemini → Groq → OpenRouter"""
+    prompt = build_prompt(slot_key, news_data, now)
+    print(f"  prompt 長度：{len(prompt)} 字元")
+
+    last_error = None
+    for provider_name, provider_fn in API_PROVIDERS:
+        try:
+            print(f"  嘗試：{provider_name}...")
+            full_text = provider_fn(prompt)
+            print(f"  ✅ {provider_name} 成功")
+            return {
+                "full_text": full_text,
+                "sections": parse_sections(full_text),
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "provider": provider_name,
+            }
+        except ValueError as e:
+            print(f"  ⏭️  {provider_name} 跳過（{e}）")
+            continue
+        except Exception as e:
+            err_str = str(e)
+            if any(k in err_str for k in ["429", "quota", "RESOURCE_EXHAUSTED", "rate_limit", "exhausted", "overloaded"]):
+                print(f"  ⚠️  {provider_name} 額度用盡，切換下一個...")
+                last_error = e
+                continue
+            else:
+                raise
+
+    raise RuntimeError(f"所有 API 均失敗或額度用盡。最後錯誤：{last_error}")
 
 # ─── Firebase 存儲 ───────────────────────────────────────────────────────────
 
