@@ -1,1 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股市新聞自動整理</title>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<style>
+  :root {
+    --bg: #0d0f14;
+    --bg2: #141720;
+    --bg3: #1c202e;
+    --border: rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.13);
+    --text: #e8eaf0;
+    --muted: #7a8099;
+    --accent: #4f8ef7;
+    --accent2: #38c9a0;
+    --accent3: #f7c04f;
+    --up: #38c9a0;
+    --dn: #f0606a;
+    --font: 'Inter', 'Noto Sans TC', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(13,15,20,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 2rem;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px;
+  }
+  .logo { font-size: 15px; font-weight: 600; letter-spacing: -.3px; display: flex; align-items: center; gap: 8px; }
+  .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent2); animation: blink 2s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .topbar-right { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--muted); }
+  .live-tag { background: rgba(56,201,160,0.12); color: var(--accent2); border: 0.5px solid rgba(56,201,160,0.3); padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 500; }
+
+  /* ── LAYOUT ── */
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  /* ── TIME SLOTS ── */
+  .slots { display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; margin-bottom: 2rem; }
+  .slot {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-radius: 10px; padding: 12px 10px; text-align: center; cursor: pointer;
+    transition: all .15s;
+  }
+  .slot:hover { border-color: var(--border2); background: var(--bg3); }
+  .slot.active { border-color: var(--accent); background: rgba(79,142,247,0.08); }
+  .slot-time { font-size: 15px; font-weight: 600; color: var(--text); }
+  .slot-label { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .slot-badge { margin-top: 6px; font-size: 10px; padding: 2px 7px; border-radius: 99px; display: inline-block; }
+  .badge-done { background: rgba(56,201,160,0.12); color: var(--accent2); }
+  .badge-now  { background: rgba(247,192,79,0.12);  color: var(--accent3); }
+  .badge-wait { background: rgba(122,128,153,0.12); color: var(--muted); }
+
+  /* ── SECTION HEADER ── */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .section-title { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+  .last-updated { font-size: 11px; color: var(--muted); }
+
+  /* ── SUMMARY GRID ── */
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1.5rem; }
+  .summary-full { grid-column: 1 / -1; }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-radius: 12px; padding: 1.25rem;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border2); }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 1rem; }
+  .card-icon {
+    width: 34px; height: 34px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .icon-us  { background: rgba(79,142,247,0.12); }
+  .icon-tw  { background: rgba(56,201,160,0.12); }
+  .icon-fi  { background: rgba(247,192,79,0.12); }
+  .icon-sum { background: rgba(160,110,247,0.12); }
+  .card-title { font-size: 13px; font-weight: 600; }
+  .card-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .card-body  { font-size: 13px; line-height: 1.85; color: #c8ccda; white-space: pre-wrap; }
+  .card-body.empty { color: var(--muted); font-style: italic; }
+
+  /* ── CONCLUSION BAR ── */
+  .conclusion {
+    background: linear-gradient(135deg, rgba(79,142,247,0.08), rgba(56,201,160,0.06));
+    border: 0.5px solid rgba(79,142,247,0.2);
+    border-radius: 12px; padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    display: flex; align-items: flex-start; gap: 12px;
+  }
+  .conclusion-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+  .conclusion-text { font-size: 14px; line-height: 1.7; font-weight: 500; }
+
+  /* ── HISTORY TABLE ── */
+  .history-list { display: flex; flex-direction: column; gap: 6px; }
+  .history-item {
+    background: var(--bg2); border: 0.5px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+    display: flex; align-items: flex-start; gap: 12px; cursor: pointer;
+    transition: all .12s;
+  }
+  .history-item:hover { border-color: var(--border2); background: var(--bg3); }
+  .history-meta { flex-shrink: 0; }
+  .history-slot { font-size: 11px; font-weight: 600; color: var(--accent); }
+  .history-date { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .history-preview { font-size: 12px; color: var(--muted); line-height: 1.5; flex: 1; }
+
+  /* ── LOADING ── */
+  .loading { text-align: center; padding: 3rem; color: var(--muted); }
+  .spinner {
+    width: 28px; height: 28px; border: 2px solid var(--border2);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; margin: 0 auto 1rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── TABS ── */
+  .tabs { display: flex; gap: 0; border-bottom: 0.5px solid var(--border); margin-bottom: 1.5rem; }
+  .tab { font-size: 13px; padding: 10px 16px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -0.5px; transition: all .12s; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab:hover { color: var(--text); }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 700px) {
+    .slots { grid-template-columns: repeat(3,1fr); }
+    .summary-grid { grid-template-columns: 1fr; }
+    .container { padding: 1rem; }
+    .topbar { padding: 0 1rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">
+    <span class="logo-dot"></span>
+    股市新聞自動整理
+  </div>
+  <div class="topbar-right">
+    <span id="clock">--:--:--</span>
+    <span class="live-tag">🤖 AI 摘要</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 時段選擇 -->
+  <div class="slots" id="slots-row"></div>
+
+  <!-- 分頁 -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('latest')" id="tab-latest">最新摘要</div>
+    <div class="tab" onclick="switchTab('history')" id="tab-history">歷史記錄</div>
+  </div>
+
+  <!-- 最新摘要 -->
+  <div id="pane-latest">
+    <div id="latest-content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <div>載入中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 歷史記錄 -->
+  <div id="pane-history" style="display:none">
+    <div id="history-content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <div>載入中...</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// ⚠️  請填入你的 Firebase 設定
+// ══════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyBG8Z34eku4okgCdIWMsh5VrzE7PpkNmwg",
+  authDomain: "stock-news-bot-63c7e.firebaseapp.com",
+  projectId: "stock-news-bot-63c7e",
+  storageBucket: "stock-news-bot-63c7e.firebasestorage.app",
+  messagingSenderId: "5663462927",
+  appId: "1:5663462927:web:e9580d1bb54d0da2c5f57a",
+  measurementId: "G-E5PWTC0HNK"
+};
+
+// ══════════════════════════════════════════════
+
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.firestore();
+
+const SLOTS = [
+  { key:'am6',  time:'06:00', label:'早盤前' },
+  { key:'am9',  time:'09:00', label:'開盤前' },
+  { key:'pm12', time:'12:00', label:'午盤'   },
+  { key:'pm15', time:'15:00', label:'收盤'   },
+  { key:'pm21', time:'21:00', label:'美股前' },
+];
+
+// ── 時鐘 ──────────────────────────────────────
+function tick() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('zh-TW', {hour12:false});
+}
+tick(); setInterval(tick, 1000);
+
+// ── 時段列 ────────────────────────────────────
+function renderSlots() {
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const row = document.getElementById('slots-row');
+  row.innerHTML = SLOTS.map(s => {
+    const [h,m] = s.time.split(':').map(Number);
+    const sm = h*60+m;
+    const diff = cur - sm;
+    let bClass, bText;
+    if (diff > 10)         { bClass='badge-done'; bText='✓ 完成'; }
+    else if (diff >= -5)   { bClass='badge-now';  bText='● 進行中'; }
+    else                   { bClass='badge-wait'; bText='待執行'; }
+    const active = Math.abs(diff) <= 10 ? ' active' : '';
+    return `<div class="slot${active}" onclick="loadSlot('${s.key}')">
+      <div class="slot-time">${s.time}</div>
+      <div class="slot-label">${s.label}</div>
+      <div class="slot-badge ${bClass}">${bText}</div>
+    </div>`;
+  }).join('');
+}
+renderSlots();
+
+// ── 分頁切換 ──────────────────────────────────
+function switchTab(tab) {
+  ['latest','history'].forEach(t => {
+    document.getElementById('pane-'+t).style.display = t===tab ? '' : 'none';
+    document.getElementById('tab-'+t).className = 'tab' + (t===tab?' active':'');
+  });
+  if (tab === 'history') loadHistory();
+}
+
+// ── 渲染摘要卡片 ──────────────────────────────
+function renderSummary(data) {
+  const updated = data.last_updated
+    ? new Date(data.last_updated).toLocaleString('zh-TW',{hour12:false})
+    : '—';
+
+  const conclusion = data.conclusion || data.summary_conclusion || '';
+  const us = data.summary_us || '';
+  const tw = data.summary_tw || '';
+  const fi = data.summary_fi || '';
+
+  return `
+    ${conclusion ? `
+    <div class="conclusion">
+      <div class="conclusion-icon">💡</div>
+      <div class="conclusion-text">${escHtml(conclusion)}</div>
+    </div>` : ''}
+
+    <div class="section-header">
+      <div class="section-title">本時段重點</div>
+      <div class="last-updated">更新：${updated}</div>
+    </div>
+
+    <div class="summary-grid">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-icon icon-us">🇺🇸</div>
+          <div><div class="card-title">美股重點</div><div class="card-sub">US Markets</div></div>
+        </div>
+        <div class="card-body${us?'':' empty'}">${us ? escHtml(us) : '尚無資料'}</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-icon icon-tw">🇹🇼</div>
+          <div><div class="card-title">台股重點</div><div class="card-sub">TWSE Markets</div></div>
+        </div>
+        <div class="card-body${tw?'':' empty'}">${tw ? escHtml(tw) : '尚無資料'}</div>
+      </div>
+
+      <div class="card summary-full">
+        <div class="card-head">
+          <div class="card-icon icon-fi">📊</div>
+          <div><div class="card-title">投信投顧分析</div><div class="card-sub">Fund Analysis</div></div>
+        </div>
+        <div class="card-body${fi?'':' empty'}">${fi ? escHtml(fi) : '尚無資料'}</div>
+      </div>
+    </div>`;
+}
+
+// ── 載入最新摘要 ──────────────────────────────
+async function loadLatest() {
+  try {
+    const doc = await db.collection('latest').doc('summary').get();
+    const el = document.getElementById('latest-content');
+    if (!doc.exists) {
+      el.innerHTML = `<div class="loading" style="color:var(--muted)">尚無資料，等待第一次執行完成</div>`;
+      return;
+    }
+    el.innerHTML = renderSummary(doc.data());
+  } catch(e) {
+    document.getElementById('latest-content').innerHTML =
+      `<div class="loading" style="color:#f0606a">Firebase 連線失敗：${e.message}<br><br>請確認 FIREBASE_CONFIG 已填入正確設定</div>`;
+  }
+}
+
+// ── 載入指定時段 ──────────────────────────────
+async function loadSlot(slotKey) {
+  const today = new Date().toISOString().slice(0,10);
+  const docId = `${today}_${slotKey}`;
+  const el = document.getElementById('latest-content');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><div>載入中...</div></div>';
+  try {
+    const doc = await db.collection('stock_summaries').doc(docId).get();
+    if (!doc.exists) {
+      el.innerHTML = `<div class="loading" style="color:var(--muted)">今日此時段尚無資料（${docId}）</div>`;
+      return;
+    }
+    el.innerHTML = renderSummary(doc.data());
+  } catch(e) {
+    el.innerHTML = `<div class="loading" style="color:#f0606a">載入失敗：${e.message}</div>`;
+  }
+}
+
+// ── 載入歷史記錄 ──────────────────────────────
+async function loadHistory() {
+  const el = document.getElementById('history-content');
+  try {
+    const snap = await db.collection('stock_summaries')
+      .orderBy('timestamp','desc').limit(30).get();
+
+    if (snap.empty) {
+      el.innerHTML = `<div class="loading" style="color:var(--muted)">尚無歷史記錄</div>`;
+      return;
+    }
+
+    const items = snap.docs.map(d => {
+      const data = d.data();
+      const ts = data.timestamp
+        ? new Date(data.timestamp).toLocaleString('zh-TW',{hour12:false})
+        : d.id;
+      const preview = (data.summary_conclusion || data.summary_us || '').slice(0,80);
+      return `<div class="history-item" onclick="loadHistoryDoc('${d.id}')">
+        <div class="history-meta">
+          <div class="history-slot">${data.slot_label || d.id}</div>
+          <div class="history-date">${ts}</div>
+        </div>
+        <div class="history-preview">${escHtml(preview)}...</div>
+      </div>`;
+    }).join('');
+
+    el.innerHTML = `<div class="history-list">${items}</div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="loading" style="color:#f0606a">載入失敗：${e.message}</div>`;
+  }
+}
+
+async function loadHistoryDoc(docId) {
+  switchTab('latest');
+  const el = document.getElementById('latest-content');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div><div>載入中...</div></div>';
+  const doc = await db.collection('stock_summaries').doc(docId).get();
+  if (doc.exists) el.innerHTML = renderSummary(doc.data());
+}
+
+// ── 工具函式 ──────────────────────────────────
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── 初始化 ────────────────────────────────────
+loadLatest();
+</script>
+</body>
+</html>
 
