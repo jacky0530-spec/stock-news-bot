@@ -317,7 +317,7 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
             continue
         except Exception as e:
             err_str = str(e)
-            if any(k in err_str for k in ["429", "quota", "RESOURCE_EXHAUSTED", "rate_limit", "exhausted", "overloaded"]):
+            if any(k in err_str for k in ["429", "400", "quota", "RESOURCE_EXHAUSTED", "rate_limit", "exhausted", "overloaded", "credit", "balance", "billing", "insufficient"]):
                 print(f"  ⚠️  {provider_name} 額度用盡，切換下一個...")
                 last_error = e
                 continue
