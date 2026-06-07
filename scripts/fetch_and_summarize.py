@@ -101,24 +101,52 @@ def init_firebase():
 
 # ─── 新聞抓取 ────────────────────────────────────────────────────────────────
 
-def fetch_news_from_feeds(category: str, max_per_feed: int = 5) -> list[dict]:
-    """從 RSS feeds 抓取新聞（含 User-Agent、重試、來源標記）"""
+def parse_pub_time(entry) -> datetime.datetime:
+    """解析 RSS 發布時間，轉為 UTC datetime"""
+    import email.utils, time
+    for field in ("published_parsed", "updated_parsed"):
+        t = entry.get(field)
+        if t:
+            try:
+                return datetime.datetime(*t[:6], tzinfo=datetime.timezone.utc)
+            except Exception:
+                pass
+    # 嘗試解析字串格式
+    for field in ("published", "updated"):
+        s = entry.get(field, "")
+        if s:
+            try:
+                ts = email.utils.parsedate_to_datetime(s)
+                return ts.astimezone(datetime.timezone.utc)
+            except Exception:
+                pass
+    return datetime.datetime.now(datetime.timezone.utc)  # 無法解析則視為現在
+
+def fetch_news_from_feeds(category: str, max_per_feed: int = 8,
+                          hours_limit: int = 48) -> list[dict]:
+    """從 RSS feeds 抓取新聞（只保留近48小時，含 User-Agent、去重）"""
     articles = []
     feeds = NEWS_FEEDS.get(category, [])
     ok_count = 0
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_limit)
 
     for feed_url in feeds:
         is_google = "news.google.com" in feed_url
         label = "Google News" if is_google else feed_url.split("/")[2]
         try:
-            # feedparser 支援傳入 request_headers
             parsed = feedparser.parse(feed_url, request_headers=FEED_HEADERS)
             entries = parsed.entries[:max_per_feed]
             if not entries:
                 print(f"    [空] {label}")
                 continue
+
+            added = 0
             for entry in entries:
-                # Google News 的標題格式：「新聞標題 - 媒體名稱」，拆開取媒體名
+                # 時間過濾：只保留近48小時
+                pub_time = parse_pub_time(entry)
+                if pub_time < cutoff:
+                    continue
+
                 title = entry.get("title", "")
                 source_name = parsed.feed.get("title", label)
                 if is_google and " - " in title:
@@ -126,19 +154,26 @@ def fetch_news_from_feeds(category: str, max_per_feed: int = 5) -> list[dict]:
                     title = parts[0].strip()
                     source_name = parts[1].strip()
 
+                # 計算距現在幾小時
+                hours_ago = (datetime.datetime.now(datetime.timezone.utc) - pub_time).total_seconds() / 3600
+
                 articles.append({
                     "title": title,
                     "summary": entry.get("summary", entry.get("description", ""))[:300],
                     "link": entry.get("link", ""),
                     "published": entry.get("published", ""),
+                    "published_dt": pub_time.isoformat(),
+                    "hours_ago": round(hours_ago, 1),
                     "source": source_name,
                     "feed_type": "google_news" if is_google else "rss",
                 })
+                added += 1
+
             ok_count += 1
-            print(f"    ✓ {label}：{len(entries)} 筆")
+            print(f"    ✓ {label}：{added} 筆（近48h）")
         except Exception as e:
             print(f"    [警告] {label} 失敗：{e}")
-    
+
     print(f"    共 {ok_count}/{len(feeds)} 個來源成功")
 
     # 去重（以標題前30字 hash）
@@ -150,9 +185,14 @@ def fetch_news_from_feeds(category: str, max_per_feed: int = 5) -> list[dict]:
             seen.add(h)
             unique.append(a)
 
-    # 濾掉標題太短的
+    # 過濾太短標題
     unique = [a for a in unique if len(a["title"]) > 8]
-    return unique[:20]  # 每類最多20筆給 AI
+
+    # 按發布時間排序（最新在前）
+    unique.sort(key=lambda x: x.get("published_dt",""), reverse=True)
+
+    print(f"    → 去重後有效新聞：{len(unique)} 筆")
+    return unique[:25]  # 每類最多25筆給 AI
 
 def fetch_all_news() -> dict[str, list[dict]]:
     """抓取所有分類新聞"""
@@ -169,15 +209,17 @@ def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
     slot = SLOT_CONFIG[slot_key]
     date_str = now.strftime("%Y/%m/%d %H:%M")
 
-    # 每類取前10筆完整標題與摘要
+    # 每類取前15筆完整標題與摘要，附上時間標記
     news_text = ""
     for category, articles in news_data.items():
-        news_text += f"\n\n【{category}原始新聞】"
-        for i, a in enumerate(articles[:10], 1):
-            summary = a.get("summary", "")[:120]
-            news_text += f"\n{i}. {a['title']}"
+        news_text += f"\n\n【{category}原始新聞】（近48小時，共{len(articles)}筆）"
+        for i, a in enumerate(articles[:15], 1):
+            summary = a.get("summary", "")[:150]
+            hours_ago = a.get("hours_ago", "?")
+            source = a.get("source", "")
+            news_text += f"\n{i}. [{hours_ago}小時前｜{source}] {a['title']}"
             if summary:
-                news_text += f"\n   {summary}"
+                news_text += f"\n   摘要：{summary}"
 
     return f"""你是資深財經分析師，擁有20年台美股操盤經驗。現在是 {date_str}，本時段「{slot['label']}」。
 本時段關注：{slot['focus']}
