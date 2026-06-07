@@ -9,8 +9,7 @@ import json
 import datetime
 import hashlib
 import urllib.parse
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, firestore
 import feedparser
@@ -157,73 +156,58 @@ def fetch_all_news() -> dict[str, list[dict]]:
 def build_prompt(slot_key: str, news_data: dict, now: datetime.datetime) -> str:
     slot = SLOT_CONFIG[slot_key]
     date_str = now.strftime("%Y/%m/%d %H:%M")
-    
+
+    # 每類只取前5筆標題，節省 token
     news_text = ""
     for category, articles in news_data.items():
-        news_text += f"\n\n【{category}原始新聞】\n"
-        for i, a in enumerate(articles, 1):
-            news_text += f"{i}. {a['title']}\n   {a['summary'][:150]}\n"
-    
-    return f"""你是專業財經分析師，現在是 {date_str}，本時段為「{slot['label']}」。
-本時段重點關注：{slot['focus']}
+        news_text += f"\n【{category}】"
+        for i, a in enumerate(articles[:5], 1):
+            news_text += f"\n{i}. {a['title']}"
 
-以下是剛抓取的最新新聞：{news_text}
+    return f"""財經分析師，{date_str}，{slot['label']}，關注：{slot['focus']}
 
-請整理成以下格式的結構化摘要（繁體中文）：
+新聞：{news_text}
+
+請用繁體中文輸出（每區塊100字內）：
 
 【美股重點】
-1. 三大重點新聞（每條一句話，含數字）
-2. 盤勢氛圍：多/空/中性 + 主因
-3. 關注個股/主題：（列3個）
-4. 操作方向：積極/保守/觀望
+1. 三大重點（一句話含數字）
+2. 氛圍：多/空/中性+主因
+3. 關注：3個個股或主題
+4. 方向：積極/保守/觀望
 
 【台股重點】
-1. 三大重點新聞（每條一句話，含數字）
-2. 盤勢氛圍：多/空/中性 + 主因
-3. 關注族群：（列3個）
-4. 操作方向：積極/保守/觀望
+1. 三大重點（一句話含數字）
+2. 氛圍：多/空/中性+主因
+3. 關注族群：3個
+4. 方向：積極/保守/觀望
 
 【投信投顧動態】
-1. 本週主推商品/ETF
-2. 法人動向摘要
-3. 市場操作建議
+法人動向與操作建議（3句話）
 
 【整體結論】
-一句話總結今日市場氛圍與操作重點。
-
-格式要求：條列清晰、專業易讀、善用數字，每區塊200字以內。"""
+一句話總結。"""
 
 def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> dict:
-    """呼叫 Gemini API 生成摘要（新版 SDK）"""
-    import time
+    """呼叫 Gemini API 生成摘要（免費方案，無重試）"""
+    from google import genai as google_genai
+    from google.genai import types
 
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = google_genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     prompt = build_prompt(slot_key, news_data, now)
 
-    for attempt in range(3):
-        try:
-            print(f"  呼叫 Gemini（第 {attempt+1} 次嘗試）...")
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=1200,
-                    temperature=0.4,
-                )
-            )
-            full_text = response.text
-            break
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                wait = 30 * (attempt + 1)
-                print(f"  [限速] 等待 {wait} 秒後重試...")
-                time.sleep(wait)
-                if attempt == 2:
-                    raise
-            else:
-                raise
+    print(f"  prompt 長度：{len(prompt)} 字元")
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=800,
+            temperature=0.4,
+        )
+    )
+    full_text = response.text
 
+    # 解析各區塊
     sections = {}
     current_key = None
     current_lines = []
@@ -247,6 +231,7 @@ def generate_summary(slot_key: str, news_data: dict, now: datetime.datetime) -> 
         usage = {"input_tokens": 0, "output_tokens": 0}
 
     return {"full_text": full_text, "sections": sections, "usage": usage}
+
 # ─── Firebase 存儲 ───────────────────────────────────────────────────────────
 
 def save_to_firestore(db, slot_key: str, now: datetime.datetime, 
@@ -310,42 +295,51 @@ def get_slot_key(now: datetime.datetime) -> str:
     else:           return "pm21"
 
 def main():
-    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))  # 台灣時間
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
     slot_key = os.environ.get("SLOT_OVERRIDE") or get_slot_key(now)
     slot_info = SLOT_CONFIG[slot_key]
-    
+
     print(f"{'='*60}")
     print(f"🕐 執行時間：{now.strftime('%Y/%m/%d %H:%M:%S')} (台灣時間)")
     print(f"📌 時段：{slot_info['label']}")
     print(f"{'='*60}")
-    
+
     # 1. 初始化 Firebase
     print("\n[1/4] 初始化 Firebase...")
     db = init_firebase()
     print("  ✅ Firebase 連線成功")
-    
+
+    # ── 防重複執行：今日此時段已成功則跳過 ──
+    date_str = now.strftime("%Y-%m-%d")
+    doc_id   = f"{date_str}_{slot_key}"
+    existing = db.collection("stock_summaries").document(doc_id).get()
+    if existing.exists and existing.to_dict().get("status") == "success":
+        force = os.environ.get("FORCE_RUN", "false").lower() == "true"
+        if not force:
+            print(f"\n⏭️  今日 {slot_info['label']} 已執行完成，跳過（設定 FORCE_RUN=true 可強制重跑）")
+            return
+        print("  ⚠️  FORCE_RUN=true，強制重新執行")
+
     # 2. 抓取新聞
     print("\n[2/4] 抓取最新新聞...")
     news_data = fetch_all_news()
     total = sum(len(v) for v in news_data.values())
     print(f"  ✅ 共抓取 {total} 筆新聞")
-    
-    # 3. AI 摘要
-    print("\n[3/4] 呼叫 Claude AI 生成摘要...")
+
+    # 3. AI 摘要（失敗直接中止，不重試）
+    print("\n[3/4] 呼叫 Gemini AI 生成摘要...")
     summary = generate_summary(slot_key, news_data, now)
-    print(f"  ✅ 摘要生成完成（{summary['usage']['output_tokens']} tokens）")
-    
+    print(f"  ✅ 摘要生成完成（input:{summary['usage']['input_tokens']} / output:{summary['usage']['output_tokens']} tokens）")
+
     # 4. 儲存
     print("\n[4/4] 儲存到 Firestore...")
     doc_id = save_to_firestore(db, slot_key, now, news_data, summary)
-    
+
     print(f"\n{'='*60}")
     print(f"✅ 完成！文件 ID：{doc_id}")
     print(f"{'='*60}\n")
-    
-    # 印出摘要預覽
     print("📋 摘要預覽：")
-    print(summary["full_text"][:500] + "...")
+    print(summary["full_text"][:400] + "...")
 
 if __name__ == "__main__":
     main()
